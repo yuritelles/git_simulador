@@ -3,12 +3,11 @@ import numpy as np
 import streamlit as st
 import altair as alt
 
-# TESTE GIT
+st.write('Teste GIT')
 
 st.set_page_config(layout="wide")
 
 st.markdown("<style> * { font-family: 'Petrobras Sans' !important ; font-size:12pt !important } </style>", unsafe_allow_html=True)
-
 
 pna_pre = pd.read_excel('C:\\Users\\NNA1\\OneDrive - PETROBRAS\\Documents\\simulador_mq_v0.3.xlsx', 0, index_col=0)
 pna_dem = pd.read_excel('C:\\Users\\NNA1\\OneDrive - PETROBRAS\\Documents\\simulador_mq_v0.3.xlsx', 1, index_col=0)
