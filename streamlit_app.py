@@ -3,7 +3,7 @@ import numpy as np
 import streamlit as st
 import altair as alt
 
-st.write('Teste GIT')
+# TESTE GIT
 
 st.set_page_config(layout="wide")
 
