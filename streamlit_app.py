@@ -3,6 +3,8 @@ import numpy as np
 import streamlit as st
 import altair as alt
 
+# TESTE GIT
+
 st.set_page_config(layout="wide")
 
 st.markdown("<style> * { font-family: 'Petrobras Sans' !important ; font-size:12pt !important } </style>", unsafe_allow_html=True)
