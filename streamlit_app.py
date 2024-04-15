@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import altair as alt
-import numpy_financial as npf
 
 st.set_page_config(layout="wide")
 
@@ -20,10 +19,11 @@ pna_dem = pd.read_excel('simulador_mq_v0.3.xlsx', 1, index_col=0)
 pna_vol = pd.read_excel('simulador_mq_v0.3.xlsx', 2, index_col=0)
 pna_fin = pd.read_excel('simulador_mq_v0.3.xlsx', 3, index_col=0)
 
+tmas = np.array([0.1,0.1,0.1,0.1,0.1,0.1])
 cnv_ini = np.array([2025,2025,2025,2025,2025,2025])
 cnv_fim = np.array([2050,2050,2050,2050,2050,2050])
-sim_opx = np.array([279,252,168,201,224,279])
-sim_cpx = np.array([184,176,150,160,167,184])
+sim_opx = np.array([300,82,88,81,84,109])
+sim_cpx = np.array([500,660,600,800,870,940])
 sim_ldt = np.array([5,5,2,4,1,5])
 sim_co2 = np.array([5,5,5,5,5,5])
 pna_avp = pna_vol.mean()
@@ -38,73 +38,92 @@ cnv_crv = pna_vol.copy()
 
 i=0
 st.sidebar.header('Simulações')
-
 for p in pna_vol.columns:
     exp = st.sidebar.expander(p)
     vol_ano = int(pna_avp[p])
     dem_ano = int(pna_avd[p])
 
-    cnv_ini[i], cnv_fim[i] = exp.slider('Período de Convergência', value=[cnv_ini[i],cnv_fim[i]],min_value=2025,max_value=2050, key='sld_cnv_' + str(i))
+    cnv_ini[i], cnv_fim[i] = exp.slider('Período de Convergência', value=[cnv_ini[i]+sim_ldt[i],cnv_fim[i]],min_value=2025+sim_ldt[i],max_value=2050, key='sld_cnv_' + str(i))
 
     sim_avp[i] = exp.select_slider('Produção adicional',range(-vol_ano,vol_ano,1), value=0,key='sld_avp_' + str(i))
 
     i+=1
 
-
-
-
-### CURVA DE PRODUCAO ###
-
-for i in cnv_crv.columns: cnv_crv[i] = cnv_crv.index
-add_vol = np.clip((cnv_crv - cnv_ini) / (cnv_fim - cnv_ini),0,1) * sim_avp
-
-st.sidebar.header('Período')
-anos = st.sidebar.slider('Anos',value=[2025,2040],min_value=2025,max_value=2050,label_visibility='collapsed')
+st.sidebar.header('Filtros')
+anos = st.sidebar.slider('Período',value=[2025,2040],min_value=2025,max_value=2050)
 
 
 
 
-### Calculo das curvas incrementais
-
-add_rec = add_vol * pna_pre / 1000000
-add_opx = add_vol * sim_opx / 1000000
-
-cpx_crv = add_vol.copy()
-
-i=0
-for x in cpx_crv.columns:
-    cpx_crv[x] = cpx_crv[x].shift(-sim_ldt[i])
-    i=i+1
-
-add_cpx = cpx_crv.fillna(0) * sim_cpx / 1000000
-
-add_fco = add_rec - add_opx
-add_fcl = add_fco - add_cpx
-
-
-### Soma dos fluxos à financiabilidade do PN
-
-sim_vol = pna_vol + add_vol
+### SIMULAÇÃO DAS CURVAS INCREMENTAIS ###
 
 sim_fin = pna_fin.copy()
+
+# Volume
+add_vol = np.clip((cnv_crv.apply(lambda x: cnv_crv.index) - cnv_ini) / (cnv_fim - cnv_ini),0,1) * sim_avp
+
+# Receita
+add_rec = add_vol * pna_pre / 1000000
+
+# Opex
+add_opx = add_vol * sim_opx / 1000000
+
+# FCO
+add_fco = add_rec - add_opx
 sim_fin['FCO'] += add_fco.sum(1)
-sim_fin['Caixa'] += add_fcl.sum(1).cumsum()
+
+# Capex
+cpx_crv = add_vol.copy()
+i=0
+for p in cpx_crv.columns:
+    cpx_crv[p] = cpx_crv[p].diff(1)
+    cpx_crv[p] = cpx_crv[p].rolling(sim_ldt[i]+1).mean().shift(-sim_ldt[i]-1)
+    i=i+1
+add_cpx = cpx_crv.fillna(0) * sim_cpx / 1000000
+add_cpx += add_cpx.cumsum()*0.05 # Capex de manutenção
+
+sim_fin['Capex'] += add_cpx.sum(1)
+
+# FCL
+sim_fin['FCL'] = sim_fin['FCO'] - sim_fin['Capex']
+
+# Capital Empregado
+add_cpe = add_cpx.cumsum()
+add_dep = add_cpe.cumsum().shift(1).fillna(0)*0.05
+add_cpe = add_cpe - add_dep
+add_cpe[add_cpe<0]=0
 
 
-# Reequilíbrio financeiro
 
-sim_cap = np.maximum(8-sim_fin['Caixa'],0)
-sim_fin['Caixa'] += sim_cap
-sim_fin['Dívida'] += sim_cap.cumsum()
+
+### SOMA DAS CURVAS AO PLANO ###
+
+# Volumes
+sim_vol = pna_vol + add_vol
 sim_fin['Carbono'] = (pna_pre.iloc[0] / pna_pre * add_rec * sim_co2).sum(1)
 
-##################################
-#                                #
-#      Geração dos gráficos      #
-#                                #
-##################################
+# Financiabilidade
+sim_fin['Caixa'] += sim_fin['FCL'].cumsum()
+sim_fin['Capital Empregado'] += add_cpe.sum(1)
+sim_fin['Ebitda'] = sim_fin['FCO']/0.66
+sim_fin['NOPAT'] = sim_fin['FCO'] - add_dep.sum(1) * 0.66
+sim_fin['ROCE'] = sim_fin['NOPAT']/sim_fin['Capital Empregado']
 
-def gerar_graficos(tab, df_pna, df_sim, label_pna='PE atual', label_sim='Simulação'):
+# Fluxo Financeiro
+j = 0.05 # taxa de juros
+sim_fin['Captações'] = np.maximum(8-sim_fin['Caixa'],0).diff(1).fillna(0)
+sim_fin['Caixa'] += sim_fin['Captações'].cumsum() * (1+j)
+sim_fin['Dívida'] += sim_fin['Captações'].cumsum()
+
+sim_vpl = add_fco - add_cpx
+sim_vpl = sim_vpl.apply(lambda x: x/(1.05) ** (sim_vpl.index - 2024)).sum().rename('vpl').reset_index()
+
+
+
+
+### GRÁFICOS ###
+
+def gerar_graficos(tab, df_pna, df_sim, label_pna='PE atual', label_sim='Simulação', i=0):
 
     col0, col1 = tab.columns(2,gap='large')
 
@@ -116,7 +135,6 @@ def gerar_graficos(tab, df_pna, df_sim, label_pna='PE atual', label_sim='Simula�
     df = df.reset_index()
     df['index'] = df['index'].astype(str)
 
-    i=0
     w = 150/(anos[1]-anos[0])+7
 
     xs = df['variable'].unique()
@@ -145,7 +163,11 @@ def gerar_graficos(tab, df_pna, df_sim, label_pna='PE atual', label_sim='Simula�
 
             st.altair_chart(cht,use_container_width=True)
         i+=1
-
+    return(i)
 tab1, tab2 = st.tabs(['Financiabilidade','Volumes'])
-gerar_graficos(tab1, pna_fin, sim_fin)
-gerar_graficos(tab2, pna_vol, sim_vol)
+i1 = gerar_graficos(tab1, pna_fin, sim_fin)
+i2 = gerar_graficos(tab2, pna_vol, sim_vol)
+
+st.altair_chart(alt.Chart(sim_vpl).mark_arc().encode(theta='vpl',color='index'))
+
+sim_fin.to_json()
